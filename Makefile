@@ -1,9 +1,12 @@
 #Name of the program or library.
 NAME := 
 
+#Build with debug or release configuration. Set from command line like "make CONFIG=release".
+CONFIG := debug
+
 #Type of output. If making a static or shared library, set that here.
-#Options: STATIC_LIB, SHARED_LIB (doesn't actually check EXECUTABLE)
-TYPE := EXECUTABLE
+#Options: EXE for executable, A for static library, SO for shared library.
+TYPE := EXE
 
 #What file extension you're compiling.
 COMPILE_EXT := .cpp
@@ -27,26 +30,48 @@ OUTDIR := $(TOPDIR)
 #Watch out for grabbing build folders when grabbing sub directories.
 SRCDIRS := $(TOPDIR)
 
-CC = g++
+COMPILER := g++
 #Set language level or extra warnings here.
-COMP_FLAGS = -std=c++17 -Wall -Wextra -pedantic
+COMP_FLAGS := -std=c++17 -Wall -Wextra -pedantic
 #Set libraries for linking here.
 #Useful to use either package config for an instaled dependency or a direct path to a library (e.g. a submodule):
 #`pkg-config --libs sdl2`
 #-Lpath/to/my/lib/ -lmylib
-LINK_FLAGS = 
-#Set include directories for compilation here, similar to LINK_FLAGS.
+LDFLAGS := 
+#Set include directories for compilation here, similar to LDFLAGS.
 #`pkg-config --cflags sdl2`
 #-Ipath/to/my/include/dir
-INCL_DIRS = 
+INCL_DIRS := 
 
 #Debug mode flags.
-DEBUG_FLAGS = -DDEBUG -g
+DEBUG_FLAGS := -DDEBUG -g
 #Release mode flags.
-RELEASE_FLAGS = -DNDEBUG -O2
+RELEASE_FLAGS := -DNDEBUG -O2
 
 #This makes output files have _d or _r suffixes depending on debug/release build.
-APPEND_TYPE = YES
+APPEND_CONFIG_TYPE := YES
+
+#------------------------------------------------------------------
+#Tests
+#------------------------------------------------------------------
+#Set up optional tests here to use with "make test" and "make runtest"
+#Specify any additional test settings. Settings here miror above rules.
+
+#Indicate whether this makefile will define runnable tests. YES/NO
+TESTS_ENABLED := NO
+
+ifeq ($(ENABLE_TESTS),YES)
+ #If you want to remove some items without redefining a whole category, you can filter them.
+ #EG: TESTDIRS := $(filter-out srcDir1 srcDir2, $(SRCDIRS)) testDir
+ #This will get all source dirs except for srcDir1 and srcDir2, and adds testDir.
+ TESTDIRS := $(SRCDIRS)
+ TEST_COMP_FLAGS := $(COMP_FLAGS)
+ TEST_LDFLAGS := $(LDFLAGS)
+ TEST_INCL_DIRS := $(INCL_DIRS)
+
+ #If there are spefic source files to ignore in test builds (e.g. main.cpp), name them here.
+ TEST_IGNORE_SRCS := 
+endif
 
 #------------------------------------------------------------------
 #Submodules
@@ -59,56 +84,74 @@ SUBMODS :=
 #Set commands to call on submodles. By default just pass down the same commands called for this file.
 SUBMODCMD := $(MAKECMDGOALS)
 #If you have a variable you want to pass down to all submodules, you can do so with export.
-#EG: VAR := 1
-#export VAR
+#By default export the build configuration.
+export $(CONFIG)
 
 #------------------------------------------------------------------
-#Build
+#Configuration Generation
 #------------------------------------------------------------------
 #These next steps are automatic and hopefully shouldn't need modification for simple projects.
+
+#Build dir with subdirectory of build configuration, e.g. build/debug
+WORKINGDIR := $(BUILDDIR)/$(CONFIG)
+
+#Get the sources to compile from source directories.
+SRCS = $(foreach dir, $(SRCDIRS), $(wildcard $(dir)*$(COMPILE_EXT)))
+#Make names for objects. Object files let us reuse a built file if it hasn't changed between compilations.
+OBJS = $(patsubst $(TOPDIR)/%$(COMPILE_EXT),$(WORKINGDIR)/%.o,$(SRCS))
+#Make names for dependencies. Dependencies allow us to rebuild a file when included headers change.
+DEPS = $(patsubst $(TOPDIR)/%$(COMPILE_EXT),$(WORKINGDIR)/%.d,$(SRCS))
+
+#Directories we'll have to create.
+MKDIRS = $(BUILDDIR) $(WORKINGDIR) $(patsubst $(TOPDIR)/%,$(WORKINGDIR)/%,$(SRCDIRS)) $(OUTDIR)
 
 #Flags for handling dependencies. MMD generates dependencies on non-system header files.
 #MP makes a phoney target for each dependency, to avoid errors if you delete a header file and recompile
 DEPS_FLAGS = -MMD -MP
 
-#Get the sources to compile from source directories.
-SRCS = $(foreach dir, $(SRCDIRS), $(wildcard $(dir)*$(COMPILE_EXT)))
-#Make names for objects. Object files let us reuse a built file if it hasn't changed between compilations.
-OBJS = $(patsubst $(TOPDIR)/%$(COMPILE_EXT),$(BUILDDIR)/%.o,$(SRCS))
-#Make names for dependencies. Dependencies allow us to rebuild a file when included headers change.
-DEPS = $(patsubst $(TOPDIR)/%$(COMPILE_EXT),$(BUILDDIR)/%.d,$(SRCS))
+CXXFLAGS.debug   := $(DEBUG_FLAGS)
+CXXFLAGS.release := $(RELEASE_FLAGS)
+CXXFLAGS := $(COMPILER) $(INCL_DIRS) $(COMP_FLAGS) $(DEPS_FLAGS) $(CXXFLAGS.$(CONFIG))
+CXXFLAGS_TEST = $(COMPILER) $(TEST_INCL_DIRS) $(TEST_COMP_FLAGS) $(DEPS_FLAGS) $(CXXFLAGS.$(CONFIG))
 
-#Directories we'll have to create.
-MKDIRS = $(BUILDDIR) $(patsubst $(TOPDIR)/%,$(BUILDDIR)/%,$(SRCDIRS)) $(OUTDIR)
+ifeq ($(TYPE), SO)
+ #Use fPIC for "Position Independent Code" while compiling shared libs.
+ CXXFLAGS += -fPIC
+endif
 
 #Final file to output.
-COMPILED := $(OUTDIR)/$(NAME)
-ifeq ($(APPEND_TYPE), YES)
- debug:   COMPILED := $(COMPILED)_d
- release: COMPILED := $(COMPILED)_r
+OUTPUT_FILE := $(OUTDIR)/$(NAME)
+ifeq ($(APPEND_CONFIG_TYPE), YES)
+ ifeq ($(BUILD), debug)
+  OUTPUT_FILE := $(OUTPUT_FILE)_d
+ else
+  OUTPUT_FILE := $(OUTPUT_FILE)_r
+ endif
 endif
 
-#Determine what type of build we're making.
-ifeq ($(TYPE), STATIC_LIB)
- OUTPUT_CMD := static_lib
-else ifeq($(TYPE), SHARED_LIB)
- OUTPUT_CMD := shared_lib
- #Use fPIC for "Position Independent Code" while compiling.
- COMP_FLAGS += -fPIC
-else
- OUTPUT_CMD := program
-endif
+#Set up our link flags for different output types.
+LINK.A   = ar -rcs $^ -o $(OUTPUT_FILE)
+LINK.SO  = $(COMPILER) $^ -shared $(LDFLAGS) -o $(OUTPUT_FILE).so
+LINK.EXE = $(COMPILER) $^ $(LDFLAGS) -o $(OUTPUT_FILE)
 
-.PHONY: all
+#------------------------------------------------------------------
+#Rules
+#------------------------------------------------------------------
 #The main build step. Make directories, build any submodules, then build the program/library.
-#This is run by default "make" command, without debug or release flags.
-#If you want debug or release to run by default, move one of them above this.
-all:            ## Build the examples.
-all: $(MKDIRS) $(SUBMODS) $(OUTPUT_CMD)
+
+#Function to gerate correct regex. Appends "|item" if an item is already present, "item" otherwise.
+build_regex_list = $(if $(1),$(1)|$(2),$(2))
+
+#Default build step. Makes directories, builds submodules, then builds target.
+.PHONY: all
+all:            ## Default target to build.
+all: directories $(SUBMODS) build
 
 #Make any needed directories.
-$(MKDIRS):
-	@mkdir -p $@
+#The @ in front makes the command silent (no console output).
+.PHONY: directories
+directories : $(MKDIRS)
+	@mkdir -p $^
 
 #Build sub modules, passing down the build command(s).
 .PHONY: $(SUBMODS)
@@ -118,37 +161,16 @@ $(SUBMODS):
 #If build order of submodules is important, declare dependencies here. EG:
 #subdir2: subdir1 #Build subdir2 after subdir1 has completed building.
 
-#Archive step for static library.
-.PHONY: static_lib
-static_lib: $(OBJS)
-	ar -rcs $^ -o $(COMPILED)
-
-#Link step for shared library.
-.PHONY: shared_lib
-shared_lib: $(OBJS)
-	$(CC) $^ -shared $(LINK_FLAGS) -o $(COMPILED).so
-
-#Link step for program. Make sure any submodules are built first.
-.PHONY: program
-program: $(OBJS) | $(SUBMODS)
-	$(CC) $^ $(LINK_FLAGS) -o $(COMPILED)
+#Main build step. Build submodules, then objects, then grab the right link rule.
+.PHONY: build
+build: $(OBJS) | $(SUBMODS)
+	LINK.$(TYPE)
 
 #Build step.
 #Build each object with the prerequisite that either there isn't a matching object in the build dir,
 #or its last modified date is older than the source file in the source dir.
-$(OBJS): $(BUILDDIR)/%.o : $(TOPDIR)/%$(COMPILE_EXT)
-	$(CC) $(INCL_DIRS) $(COMP_FLAGS) $(DEPS_FLAGS) -c $< -o $@
-
-.PHONY: debug
-debug:          ## Make debug build.
-debug: COMP_FLAGS += $(DEBUG_FLAGS)
-debug: BUILDDIR := $(BUILDDIR)/debug
-debug: all
-
-.PHONY: release
-release:        ## Make release build.
-release: COMP_FLAGS += $(RELEASE_FLAGS)
-release: all
+$(OBJS): $(WORKINGDIR)/%.o : $(TOPDIR)/%$(COMPILE_EXT)
+	$(CXXFLAGS) -c $< -o $@
 
 .PHONY: clean
 clean:          ## Clean this project and all submodules.
@@ -156,17 +178,48 @@ clean: clean_local clean_submods
 
 .PHONY: clean_local
 clean_local:    ## Clean only this project, ignoring submodules.
-	rm -rf $(BUILDDIR) $(COMPILED) $(COMPILED)_d $(COMPILED)_r
+	rm -rf $(WORKINGDIR) $(OUTPUT_FILE)
 
 .PHONY: clean_submods
 clean_submods:  ## Clean only submodules.
 clean_submods: SUBMODCMD := clean
 clean_submods: $(SUBMODS)
 
+ifeq ($(TYPE),EXE) # run is only valid for EXE output.
+.PHONY: run
+run:            ## Build then run an executable.
+run: all
+	./$(OUTPUT_FILE)_test
+else
+IGNORED_HELP := $(call build_regex_list,$(IGNORED_HELP),run:)
+endif
+
+ifeq ($(TESTS_ENABLED),YES)
+.PHONY: test
+test:           ## Build tests.
+test: MKDIRS += $(TESTDIRS)
+test: all
+
+.PHONY: runtest
+runtest:        ## Build then run tests.
+runtest: test
+	./$(OUTPUT_FILE)
+else
+IGNORED_HELP := $(call build_regex_list,$(IGNORED_HELP),test:)
+IGNORED_HELP := $(call build_regex_list,$(IGNORED_HELP),runtest:)
+endif
+
 .PHONY: help
 #This rule grabs all the ## comments for each rule and writes them to the console.
+
+#If ignored help isn't empty, prepend ?! first for rules to ignore.
+ifneq ($(IGNORED_HELP),)
+IGNORE_REGEX := (?!$(IGNORED_HELP))
+endif
+#Filter out any ignored rules, then look for rules with a double # after them.
+HELP_REGEX := ^$(IGNORE_REGEX)([.a-zA-Z_-]+):.*?\#\# .*$$
 help:           ## Display this help.
-	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
+	@grep -P '$(HELP_REGEX)' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 # Include all dependency files. Use "-" flavour because they might not exist yet (e.g. new file being compiled).
 -include $(DEPS)
