@@ -8,6 +8,7 @@ I haven't tested all combinations of settings, so use at your own risk.
 Currently handles:  
 - Directory structurs with multiple directories/levels.
 - Support for submodules using their own makefiles.
-- Object and header dependencies
+- Object files and header dependencies
 - Outputting executables or static or shared libraries.
-- A help function to list options.
+- A help function to list (available) options.
+- Section to add tests.
