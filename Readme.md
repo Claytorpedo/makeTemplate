@@ -1,7 +1,7 @@
 # MakefileTemplate
 
 This is a template Makefile to make setting up my future projects easier. It has a lot of comments so I don't have to remember details.  
-I haven't tested all combinations of settings, so use at your own risk.
+I haven't tested all combinations of settings; use at your own risk.
 
 ## Functionality
 
