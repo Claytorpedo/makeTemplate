@@ -144,11 +144,7 @@ ifeq ($(TESTS_ENABLED),YES)
  test runtest: OUTPUT_FILE := $(TEST_OUTPUT_FILE)
 endif
 ifeq ($(APPEND_CONFIG_TYPE), YES)
- ifeq ($(CONFIG), debug)
-  OUTPUT_FILE := $(OUTPUT_FILE)_d
- else
-  OUTPUT_FILE := $(OUTPUT_FILE)_r
- endif
+ OUTPUT_FILE := $(OUTPUT_FILE)$(CONFIG_APPEND.$(CONFIG))
 endif
 
 #Set up our link flags for different output types.
