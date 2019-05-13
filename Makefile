@@ -29,34 +29,9 @@ OUTDIR := $(TOPDIR)
 #This will get a list of sub directories in your top directory, though not recursively.
 #The dir function gets the path part of each file, and use sort as it removes duplicates.
 #If you want recursion, probably best to use a shell command:
-# $(sort $(dir $(shell find . -name "$(TOPDIR)/*$(COMPILE_EXT)")))
+# $(sort $(dir $(shell find "$(TOPDIR)/" -name "*$(COMPILE_EXT)")))
 #Watch out for grabbing build folders when grabbing sub directories.
 SRCDIRS := $(TOPDIR)
-
-#------------------------------------------------------------------
-#Tests
-#------------------------------------------------------------------
-#Set up optional tests here to use with "make test" and "make runtest"
-#Specify any additional test settings. Settings here miror above rules.
-
-#Indicate whether this makefile will define runnable tests. YES/NO
-TESTS_ENABLED := NO
-
-ifeq ($(ENABLE_TESTS),YES)
- #If you want to remove some items without redefining a whole category, you can filter them.
- # TESTDIRS := $(filter-out srcDir1 srcDir2, $(SRCDIRS)) testDir
- #This will get all source dirs except for srcDir1 and srcDir2, and adds testDir.
- TESTDIRS := $(SRCDIRS)
- TEST_COMP_FLAGS := $(COMP_FLAGS)
- TEST_LDFLAGS := $(LDFLAGS)
- TEST_INCL_DIRS := $(INCL_DIRS)
-
- #If there are specific source files to ignore in test builds (e.g. src/main.cpp), name them here.
- TEST_IGNORE_SRCS := 
-qq
- .PHONY: test runtest
- test runtest: SRCDIRS := TESTDIRS
-endif
 
 #------------------------------------------------------------------
 #Submodules
@@ -101,6 +76,30 @@ DEBUG_FLAGS := -DDEBUG -g
 RELEASE_FLAGS := -DNDEBUG -O2
 
 #------------------------------------------------------------------
+#Tests
+#------------------------------------------------------------------
+#Set up optional tests here to use with "make test" and "make runtest".
+#Specify any additional test settings. Settings here miror above rules.
+#Expects that tests compilie to an executable (even if the main project doesn't).
+
+#Indicate whether this makefile will define runnable tests. YES/NO
+TESTS_ENABLED := NO
+
+ifeq ($(TESTS_ENABLED),YES)
+ #If you want to remove some items without redefining a whole category, you can filter them.
+ # TESTDIRS := $(filter-out srcDir1 srcDir2, $(SRCDIRS)) testDir
+ #This will get all source dirs except for srcDir1 and srcDir2, and adds testDir.
+ TESTDIRS := $(SRCDIRS)
+ TESTOUTDIR := $(OUTDIR)
+ TEST_COMP_FLAGS := $(COMP_FLAGS)
+ TEST_LDFLAGS := $(LDFLAGS)
+ TEST_INCL_DIRS := $(INCL_DIRS)
+
+ #If there are specific source files to ignore in test builds (e.g. src/main.cpp), name them here.
+ TEST_IGNORE_SRCS := 
+endif
+
+#------------------------------------------------------------------
 #Configuration Generation
 #------------------------------------------------------------------
 #These next steps are automatic and hopefully shouldn't need modification for simple projects.
@@ -108,12 +107,24 @@ RELEASE_FLAGS := -DNDEBUG -O2
 #Build dir with subdirectory of build configuration, e.g. build/debug
 WORKINGDIR := $(BUILDDIR)/$(CONFIG)
 
+ifeq ($(TESTS_ENABLED),YES)
+ #Override SRCDIRS on test builds so we can reuse the same variables below.
+ #Use a filter (rather than a target) so it runs immediately.
+ ifneq (,$(filter $(MAKECMDGOALS), test runtest))
+  SRCDIRS := $(TESTDIRS)
+ endif
+endif
+
 #Get the sources to compile from source directories.
 SRCS = $(foreach dir, $(SRCDIRS), $(wildcard $(dir)/*$(COMPILE_EXT)))
-ifeq ($(ENABLE_TESTS),YES)
- #Filter out any unwanted sources for test builds.
- test runtest: SRCS := $(filter-out $(TEST_IGNORE_SRCS), $(SRCS))
+
+ifeq ($(TESTS_ENABLED),YES)
+ #Filter out any unwanted sources for test builds. Similar to above, use a filter so it runs immediately.
+ ifneq (,$(filter $(MAKECMDGOALS), test runtest))
+  SRCS := $(filter-out $(TEST_IGNORE_SRCS), $(SRCS))
+ endif
 endif
+
 #Make names for objects. Object files let us reuse a built file if it hasn't changed between compilations.
 OBJS = $(patsubst $(TOPDIR)/%$(COMPILE_EXT),$(WORKINGDIR)/%.o,$(SRCS))
 #Make names for dependencies. Dependencies allow us to rebuild a file when included headers change.
@@ -124,31 +135,43 @@ MKDIRS = $(WORKINGDIR) $(patsubst $(TOPDIR)/%,$(WORKINGDIR)/%,$(SRCDIRS)) $(OUTD
 
 #Flags for handling dependencies. MMD generates dependencies on non-system header files.
 #MP makes a phoney target for each dependency, to avoid errors if you delete a header file and recompile
-DEPS_FLAGS = -MMD -MP
+DEPS_FLAGS := -MMD -MP
 
 CXXFLAGS.debug   := $(DEBUG_FLAGS)
 CXXFLAGS.release := $(RELEASE_FLAGS)
 CXXFLAGS := $(COMPILER) $(INCL_DIRS) $(COMP_FLAGS) $(DEPS_FLAGS) $(CXXFLAGS.$(CONFIG))
-CXXFLAGS_TEST = $(COMPILER) $(TEST_INCL_DIRS) $(TEST_COMP_FLAGS) $(DEPS_FLAGS) $(CXXFLAGS.$(CONFIG))
+
+ifeq ($(TESTS_ENABLED),YES)
+ #When building tests, override the type to an executable.
+ test runtest: TYPE := EXE
+ CXXFLAGS_TEST := $(COMPILER) $(TEST_INCL_DIRS) $(TEST_COMP_FLAGS) $(DEPS_FLAGS) $(CXXFLAGS.$(CONFIG))
+endif
 
 ifeq ($(TYPE), SO)
  #Use fPIC for "Position Independent Code" while compiling shared libs.
  CXXFLAGS += -fPIC
 endif
 
-#Final file to output.
+#Name of the final file to output ----
 OUTPUT_FILE := $(OUTDIR)/$(NAME)
-ifeq ($(TESTS_ENABLED),YES)
- #Needed separately for deletion on "clean".
- TEST_OUTPUT_FILE = $(OUTPUT_FILE)_test
- test runtest: OUTPUT_FILE := $(TEST_OUTPUT_FILE)
+ifneq ($(TYPE),EXE)
+ #Prepend "lib" for library files.
+ OUTPUT_FILE := $(OUTDIR)/lib$(NAME)
 endif
 ifeq ($(APPEND_CONFIG_TYPE), YES)
  OUTPUT_FILE := $(OUTPUT_FILE)$(CONFIG_APPEND.$(CONFIG))
 endif
 
+ifeq ($(TESTS_ENABLED),YES)
+ TEST_OUTPUT_FILE := $(TESTOUTDIR)/$(NAME)_test
+ ifeq ($(APPEND_CONFIG_TYPE), YES)
+  TEST_OUTPUT_FILE := $(TEST_OUTPUT_FILE)$(CONFIG_APPEND.$(CONFIG))
+ endif
+endif
+#-------------------------------------
+
 #Set up our link flags for different output types.
-LINK.A   = ar -rcs $^ -o $(OUTPUT_FILE)
+LINK.A   = ar -rcs $(OUTPUT_FILE).a $^
 LINK.SO  = $(COMPILER) $^ -shared $(LDFLAGS) -o $(OUTPUT_FILE).so
 LINK.EXE = $(COMPILER) $^ $(LDFLAGS) -o $(OUTPUT_FILE)
 
@@ -165,13 +188,13 @@ build_regex_list = $(if $(1),$(1)|$(2),$(2))
 .PHONY: all
 .DEFAULT_GOAL := all
 all:            ## Default target to build.
-all: $(MKDIRS) $(SUBMODS) build
+all: directories $(SUBMODS) build
 
 #Make any needed directories.
 #The @ in front makes the command silent (no console output).
-.PHONY: $(MKDIRS)
-$(MKDIRS):
-	@mkdir -p $@
+.PHONY: directories
+directories:
+	@mkdir -p $(MKDIRS)
 
 #Build sub modules, passing down the build command(s).
 .PHONY: $(SUBMODS)
@@ -220,13 +243,14 @@ ifeq ($(TESTS_ENABLED),YES)
  .PHONY: test
  test:           ## Build tests.
  test: CXXFLAGS := $(CXXFLAGS_TEST)
+ test: OUTPUT_FILE := $(TEST_OUTPUT_FILE)
  test: SUBMODCMD := all # Default build submoduels -- no recursive testing.
  test: all
 
  .PHONY: runtest
  runtest:        ## Build then run tests.
  runtest: test
-	./$(OUTPUT_FILE)
+	./$(TEST_OUTPUT_FILE)
 else
  #Tests not set up. Remove the test and runtest targets from help output.
  IGNORED_HELP := $(call build_regex_list,$(IGNORED_HELP),test:|runtest:)
